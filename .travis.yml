@@ -1,0 +1,76 @@
+language: php
+
+# list any PHP version you want to test against
+php:
+  - 5.5
+  - 5.6
+  
+matrix:
+  allow_failures:
+    - php: 5.5
+
+env:
+  global:
+    # Install composer binaries into local bin directory.
+    # see: http://www.drush.org/en/master/install-alternative/#install-a-global-drush-via-composer
+    - COMPOSER_BIN_DIR="$HOME/bin"
+    - PATH="$COMPOSER_BIN_DIR:$PATH"
+
+mysql:
+  database: suitcase_interim
+  username: root
+  encoding: utf8
+
+before_install:
+  - sudo apt-get update > /dev/null
+  - composer self-update
+  - mkdir -p "$COMPOSER_BIN_DIR"
+
+install:
+  # install php packages required for running a web server from drush on php 5.3
+  - sudo apt-get install -y --force-yes php5-cgi php5-mysql
+
+  # install drush globally
+  - composer global require drush/drush:6.*
+
+before_script:
+  # navigate out of module directory to prevent blown stack by recursive module lookup
+  - cd ../..
+
+  # create new site, stubbing sendmail path with true to prevent delivery errors and manually resolving drush path
+  - mysql -e 'create database suitcase_interim'
+  - echo 'sendmail_path="/bin/true"' | tee -a "$(php --ini | grep "Loaded Configuration" | awk '{print $4}')"
+  - drush --yes core-quick-drupal --profile=testing --no-server --db-url=mysql://root:@127.0.0.1/suitcase_interim --enable=simpletest suitcase_interim
+
+  # reference and enable travis_ci_drupal_module_example in build site
+  - ln -s $(readlink -e $(cd -)) suitcase_interim/drupal/sites/all/themes/suitcase_interim
+  - cd suitcase_interim/drupal/sites/all/modules/
+  - git clone https://github.com/isubit/luggage_ckeditor.git
+  - git clone https://github.com/isubit/luggage_contrib.git
+  - git clone https://github.com/isubit/luggage_core.git
+  - git clone https://github.com/isubit/luggage_roles.git
+  - drush --yes pm-enable suitcase_interim luggage_ckeditor luggage_contrib luggage_core luggage_roles
+  - drush fra -y
+  - drush cc all
+  
+  - drush en simpletest -y
+  
+  - drush status
+  
+  # start a web server on port 8080, run in the background; wait for initialization
+  - drush runserver --server=builtin 8080 &
+  - sleep 4
+  - drush vset --yes simpletest_verbose FALSE
+  # - until netstat -an 2>/dev/null | grep '8080.*LISTEN'; do true; done
+  
+script:
+  - drush test-run 'suitcase_interim' --debug --uri=http://127.0.0.1:8080
+
+# script: drush test-run 'Travis-CI Drupal Module Example' --uri=http://127.0.0.1:8080
+
+notifications:
+  email: false
+  irc:
+    channels: "chat.freenode.net##luggage"
+    on_success: never
+    on_failure: always
